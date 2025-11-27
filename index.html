@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>北京胡同电动自行车骑行规划工具（本地增强版）</title>
+    <!-- 百度地图API（兼容本地运行，添加超时兜底） -->
+    <script type="text/javascript">
+        // 本地运行适配：提前加载百度地图，添加错误捕获
+        window.BMapGL_loadScript = function() {
+            const script = document.createElement('script');
+            script.src = 'https://api.map.baidu.com/api?v=3.0&ak=zrrJu1HOoPufu4x54Fzb89yEO703iSrG&s=1';
+            script.onerror = function() {
+                window.BMapGL = { error: '加载失败' };
+                console.log('百度地图API加载失败，将启用纯列表模式');
+            };
+            document.head.appendChild(script);
+        };
+        BMapGL_loadScript();
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: "Microsoft YaHei", sans-serif; background: #f8f9fa; }
+        .container { display: flex; height: 100vh; flex-direction: column; max-width: 100vw; overflow: hidden; }
+        /* 响应式布局优化 */
+        @media (min-width: 768px) {
+            .container { flex-direction: row; }
+        }
+        .sidebar { 
+            width: 100%; 
+            max-width: 400px; 
+            background: #fff; 
+            padding: 20px; 
+            overflow-y: auto; 
+            height: 40vh;
+            box-shadow: 0 0 10px rgba(0,0,0,0.05);
+        }
+        @media (min-width: 768px) {
+            .sidebar { height: 100vh; border-right: 1px solid #eee; }
+        }
+        .map-container { flex: 1; height: 60vh; position: relative; }
+        @media (min-width: 768px) {
+            .map-container { height: 100vh; }
+        }
+        /* 样式增强 */
+        .title { 
+            font-size: 22px; 
+            font-weight: bold; 
+            margin-bottom: 15px; 
+            color: #2f54eb;
+            border-bottom: 2px solid #f0f5ff;
+            padding-bottom: 10px;
+        }
+        .filter-box { 
+            margin-bottom: 20px; 
+            padding: 15px;
+            background: #f9fafe;
+            border-radius: 8px;
+        }
+        .filter-title { 
+            font-size: 16px; 
+            font-weight: bold; 
+            margin-bottom: 12px; 
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .filter-title::before {
+            content: "";
+            display: inline-block;
+            width: 4px;
+            height: 16px;
+            background: #2f54eb;
+            border-radius: 2px;
+        }
+        .filter-btn { 
+            padding: 8px 15px; 
+            margin: 0 8px 8px 0; 
+            border: 1px solid #e5e6eb;
+            border-radius: 6px; 
+            background: #fff; 
+            cursor: pointer; 
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+        .filter-btn:hover {
+            border-color: #c9cdde;
+            background: #f5f7fa;
+        }
+        .filter-btn.active { 
+            background: #2f54eb; 
+            color: #fff;
+            border-color: #2f54eb;
+        }
+        .alley-list { margin-bottom: 20px; }
+        .alley-item { 
+            padding: 15px; 
+            background: #fff; 
+            border-radius: 8px; 
+            margin-bottom: 10px; 
+            cursor: pointer; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.03); 
+            transition: all 0.3s;
+            border-left: 4px solid transparent;
+        }
+        .alley-item:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08); 
+        }
+        .alley-item.selected { 
+            border-left: 4px solid #2f54eb; 
+            background: #f0f5ff;
+        }
+        .alley-name { 
+            font-weight: bold; 
+            margin-bottom: 6px; 
+            display: flex; 
+            justify-content: space-between; 
+            flex-wrap: wrap;
+            font-size: 15px;
+        }
+        .alley-tag { 
+            font-size: 12px; 
+            color: #666; 
+            margin-bottom: 6px; 
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .alley-tag span {
+            background: #f5f7fa;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+        .alley-info { 
+            font-size: 12px; 
+            color: #888; 
+            line-height: 1.5;
+        }
+        .allow-ebike { color: #00b42a; font-weight: normal; }
+        .forbid-ebike { color: #f53f3f; font-weight: normal; }
+        .btn-group { 
+            display: flex; 
+            gap: 10px; 
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+        .btn { 
+            flex: 1; 
+            padding: 12px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-weight: bold; 
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+        .btn-primary { 
+            background: #2f54eb; 
+            color: #fff; 
+        }
+        .btn-primary:hover { 
+            background: #1d47d9; 
+            transform: translateY(-1px);
+        }
+        .btn-default { 
+            background: #fff; 
+            color: #333; 
+            border: 1px solid #e5e6eb;
+        }
+        .btn-default:hover { 
+            background: #f5f7fa;
+            border-color: #c9cdde;
+        }
+        .tip-text { 
+            font-size: 12px; 
+            color: #999; 
+            margin-top: 10px; 
+            text-align: center; 
+        }
+        .error-tip { 
+            color: #f53f3f; 
+            font-size: 12px; 
+            margin: 10px 0; 
+            text-align: left; 
+            padding: 10px; 
+            background: #fff0f0; 
+            border-radius: 6px;
+            border-left: 4px solid #f53f3f;
+        }
+        .local-tip { 
+            font-size: 12px; 
+            color: #2f54eb; 
+            margin: 10px 0 20px; 
+            text-align: left; 
+            padding: 10px; 
+            background: #f0f5ff; 
+            border-radius: 6px;
+            border-left: 4px solid #2f54eb;
+        }
+        /* 地图加载占位 */
+        .map-placeholder {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #f8f9fa;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+        }
+        .map-placeholder p {
+            color: #666;
+            font-size: 14px;
+            margin-top: 15px;
+        }
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #e5e6eb;
+            border-top: 4px solid #2f54eb;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        /* 选中列表计数 */
+        .selected-count {
+            font-size: 12px;
+            color: #2f54eb;
+            margin: 10px 0;
+            padding: 8px;
+            background: #f0f5ff;
+            border-radius: 4px;
+            text-align: center;
+        }
+        /* 新增：搜索框样式 */
+        .search-box {
+            margin-bottom: 20px;
+            position: relative;
+        }
+        .search-input {
+            width: 100%;
+            padding: 12px 15px 12px 40px;
+            border: 1px solid #e5e6eb;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        .search-input:focus {
+            border-color: #2f54eb;
+            box-shadow: 0 0 0 2px rgba(47, 84, 235, 0.1);
+        }
+        .search-icon {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #999;
+            font-size: 16px;
+        }
+        /* 新增：路线信息弹窗 */
+        .route-popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            z-index: 1000;
+            width: 90%;
+            max-width: 500px;
+            display: none;
+        }
+        .route-popup-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #2f54eb;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .route-popup-content {
+            font-size: 14px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+        .route-popup-close {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            cursor: pointer;
+            font-size: 18px;
+            color: #999;
+        }
+        .route-popup-close:hover {
+            color: #f53f3f;
+        }
+        .route-popup-btn {
+            text-align: center;
+        }
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+            display: none;
+        }
+        /* 新增：移动端优化 */
+        @media (max-width: 767px) {
+            .sidebar {
+                height: 50vh;
+            }
+            .map-container {
+                height: 50vh;
+            }
+            .filter-btn {
+                padding: 6px 10px;
+                font-size: 13px;
+            }
+            .alley-item {
+                padding: 10px;
+            }
+            .btn {
+                padding: 10px;
+                font-size: 13px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="title">北京胡同骑行规划工具（本地增强版）</div>
+            
+            <!-- 本地运行提示 -->
+            <div class="local-tip">💡 本地运行模式已开启，无需配置域名，支持离线浏览胡同信息</div>
+            
+            <!-- 错误提示区域 -->
+            <div class="error-tip" id="errorTip" style="display: none;"></div>
+            
+            <!-- 新增：搜索框 -->
+            <div class="search-box">
+                <span class="search-icon">🔍</span>
+                <input type="text" class="search-input" id="searchInput" placeholder="搜索胡同名称/特色/区域...">
+            </div>
+            
+            <!-- 选中计数 -->
+            <div class="selected-count" id="selectedCount">已选择：0 条胡同（至少选择2条可生成路线）</div>
+            
+            <!-- 筛选区域 -->
+            <div class="filter-box">
+                <div class="filter-title">区域筛选</div>
+                <button class="filter-btn active" data-area="all">全部区域</button>
+                <button class="filter-btn" data-area="dongcheng">东城区</button>
+                <button class="filter-btn" data-area="xicheng">西城区</button>
+                <button class="filter-btn" data-area="shijingshan">石景山区</button>
+                <button class="filter-btn" data-area="haidian">海淀区</button>
+                <button class="filter-btn" data-area="chaoyang">朝阳区</button>
+                <button class="filter-btn" data-area="fengtai">丰台区</button>
+                <button class="filter-btn" data-area="tongzhou">通州区</button>
+            </div>
+            
+            <div class="filter-box">
+                <div class="filter-title">特色筛选</div>
+                <button class="filter-btn active" data-tag="all">全部特色</button>
+                <button class="filter-btn" data-tag="历史">历史文化</button>
+                <button class="filter-btn" data-tag="美食">特色美食</button>
+                <button class="filter-btn" data-tag="网红">网红打卡</button>
+                <button class="filter-btn" data-tag="安静">小众安静</button>
+                <button class="filter-btn" data-tag="复古">复古建筑</button>
+            </div>
+            
+            <div class="filter-box">
+                <div class="filter-title">电动车可达</div>
+                <button class="filter-btn active" data-ebike="all">全部</button>
+                <button class="filter-btn" data-ebike="allow">允许通行</button>
+                <button class="filter-btn" data-ebike="forbid">禁止通行</button>
+            </div>
+            
+            <div class="alley-list" id="alleyList"></div>
+            
+            <div class="btn-group">
+                <button class="btn btn-default" id="clearBtn">清空选择</button>
+                <button class="btn btn-primary" id="routeBtn">生成骑行路线</button>
+                <button class="btn btn-primary" id="navBtn">导航出发</button>
+            </div>
+            
+            <div class="tip-text">提示：标注"禁止通行"的胡同可将电动车停在入口处步行进入</div>
+        </div>
+        
+        <div class="map-container" id="map">
+            <!-- 地图加载占位 -->
+            <div class="map-placeholder" id="mapPlaceholder">
+                <div class="loading-spinner"></div>
+                <p>正在加载地图，请稍候...</p>
+                <p style="font-size: 12px; color: #999;">本地运行可能需要几秒时间</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新增：路线信息弹窗 -->
+    <div class="overlay" id="overlay"></div>
+    <div class="route-popup" id="routePopup">
+        <span class="route-popup-close" id="popupClose">×</span>
+        <div class="route-popup-title">骑行路线详情</div>
+        <div class="route-popup-content" id="routeContent"></div>
+        <div class="route-popup-btn">
+            <button class="btn btn-primary" id="copyRouteBtn">复制路线信息</button>
+        </div>
+    </div>
+
+    <script>
+        // 初始化DOM元素
+        const errorTip = document.getElementById("errorTip");
+        const mapPlaceholder = document.getElementById("mapPlaceholder");
+        const selectedCount = document.getElementById("selectedCount");
+        const searchInput = document.getElementById("searchInput");
+        const routePopup = document.getElementById("routePopup");
+        const overlay = document.getElementById("overlay");
+        const popupClose = document.getElementById("popupClose");
+        const routeContent = document.getElementById("routeContent");
+        const copyRouteBtn = document.getElementById("copyRouteBtn");
+        let mapLoaded = false;
+        let map = null;
+        let selectedAlleys = [];
+        let markers = [];
+        let polyline = null;
+
+        // 胡同数据（完整40+条）
+        const alleyData = [
+            // 东城区（10条）
+            { name: "南锣鼓巷", lng: 116.408, lat: 39.932, area: "dongcheng", tag: "网红|美食", ebike: "forbid", shootTime: "10:00-16:00", park: "胡同两端入口停车场", desc: "北京最知名胡同，网红打卡+特色小吃聚集地，核心区域禁止电动车" },
+            { name: "五道营胡同", lng: 116.415, lat: 39.935, area: "dongcheng", tag: "小众|美食", ebike: "allow", shootTime: "9:00-17:00", park: "胡同北口路边停车区", desc: "文艺小众胡同，咖啡馆、文创店密集，人少安静，电动车可通行" },
+            { name: "国子监街", lng: 116.423, lat: 39.938, area: "dongcheng", tag: "历史|安静", ebike: "allow", shootTime: "8:30-16:30", park: "孔庙西门停车场", desc: "紧邻国子监、孔庙，古色古香，文化氛围浓厚" },
+            { name: "东交民巷", lng: 116.417, lat: 39.907, area: "dongcheng", tag: "历史|复古", ebike: "allow", shootTime: "14:00-18:00", park: "巷内多处路边停车点", desc: "最长的胡同，近代西洋建筑，适合复古风拍摄" },
+            { name: "菊儿胡同", lng: 116.410, lat: 39.934, area: "dongcheng", tag: "历史|安静", ebike: "allow", shootTime: "10:00-15:00", park: "胡同东口停车区", desc: "传统四合院集中地，建筑风格独特，适合拍照" },
+            { name: "帽儿胡同", lng: 116.409, lat: 39.936, area: "dongcheng", tag: "历史|安静", ebike: "allow", shootTime: "9:30-16:00", park: "胡同南口停车区", desc: "四合院保护区，有婉容故居，环境清幽" },
+            { name: "北锣鼓巷", lng: 116.406, lat: 39.937, area: "dongcheng", tag: "安静|小众", ebike: "allow", shootTime: "10:00-17:00", park: "巷口路边停车点", desc: "南锣鼓巷姐妹巷，人少清静，文艺小店多" },
+            { name: "南剪子巷", lng: 116.412, lat: 39.928, area: "dongcheng", tag: "历史|安静", ebike: "allow", shootTime: "8:30-15:30", park: "巷口停车区", desc: "紧邻王府井，老北京居民区，保留传统风貌" },
+            { name: "灯市口北巷", lng: 116.419, lat: 39.925, area: "dongcheng", tag: "网红|文艺", ebike: "allow", shootTime: "11:00-18:00", park: "灯市口大街停车场", desc: "潮流小店聚集地，适合时尚vlog拍摄" },
+            { name: "草厂胡同", lng: 116.428, lat: 39.912, area: "dongcheng", tag: "复古|安静", ebike: "allow", shootTime: "9:00-16:00", park: "胡同西口停车区", desc: "前门附近，传统四合院密集，复古风拍摄绝佳" },
+            
+            // 西城区（10条）
+            { name: "烟袋斜街", lng: 116.397, lat: 39.939, area: "xicheng", tag: "历史|美食", ebike: "forbid", shootTime: "11:00-17:00", park: "鼓楼东大街停车场", desc: "连接什刹海与鼓楼，明清风格建筑，特色小店多" },
+            { name: "什刹海胡同群", lng: 116.392, lat: 39.943, area: "xicheng", tag: "历史|网红", ebike: "allow", shootTime: "15:00-20:00", park: "后海北沿停车区", desc: "围绕什刹海，含银锭桥、后海北沿等，夜景美" },
+            { name: "杨梅竹斜街", lng: 116.391, lat: 39.917, area: "xicheng", tag: "网红|文艺", ebike: "allow", shootTime: "10:00-18:00", park: "前门西大街停车场", desc: "前门附近，文艺小店、书店、美术馆聚集地" },
+            { name: "护国寺街", lng: 116.386, lat: 39.931, area: "xicheng", tag: "美食|历史", ebike: "allow", shootTime: "11:00-19:00", park: "街两端路边停车点", desc: "老北京美食街，护国寺小吃、烤肉季等老字号" },
+            { name: "琉璃厂西街", lng: 116.382, lat: 39.914, area: "xicheng", tag: "历史|复古", ebike: "allow", shootTime: "9:00-16:30", park: "街南口停车场", desc: "文化一条街，文房四宝、古玩字画店密集，古色古香" },
+            { name: "大栅栏西街", lng: 116.386, lat: 39.907, area: "xicheng", tag: "网红|美食", ebike: "forbid", shootTime: "10:00-19:00", park: "大栅栏停车场", desc: "前门核心区域，老字号聚集地，禁止电动车通行" },
+            { name: "砖塔胡同", lng: 116.384, lat: 39.926, area: "xicheng", tag: "历史|安静", ebike: "allow", shootTime: "9:30-16:30", park: "胡同东口停车区", desc: "北京最古老的胡同之一，保留传统风貌" },
+            { name: "月坛北街", lng: 116.358, lat: 39.927, area: "xicheng", tag: "安静|小众", ebike: "allow", shootTime: "10:00-17:00", park: "街两端停车点", desc: "月坛公园附近，居民区胡同，人少清静" },
+            { name: "德胜门内大街胡同群", lng: 116.375, lat: 39.945, area: "xicheng", tag: "历史|美食", ebike: "allow", shootTime: "11:00-18:00", park: "德胜门西大街停车场", desc: "围绕德胜门，老北京小吃店、四合院密集" },
+            { name: "南官房胡同", lng: 116.390, lat: 39.941, area: "xicheng", tag: "网红|安静", ebike: "allow", shootTime: "14:00-19:00", park: "后海公园停车区", desc: "什刹海附近，文艺小店、咖啡馆多，夜景美" },
+            
+            // 石景山区（8条）
+            { name: "模式口大街", lng: 116.198, lat: 39.975, area: "shijingshan", tag: "历史|复古", ebike: "allow", shootTime: "9:00-17:00", park: "大街东口停车场", desc: "京西古道起点，明清建筑保存完好，有法海寺、承恩寺" },
+            { name: "五里坨胡同群", lng: 116.152, lat: 39.986, area: "shijingshan", tag: "安静|小众", ebike: "allow", shootTime: "8:30-16:00", park: "五里坨路路边停车区", desc: "原生态胡同，人少清静，保留老北京乡村风貌" },
+            { name: "麻峪胡同", lng: 116.135, lat: 39.947, area: "shijingshan", tag: "历史|安静", ebike: "allow", shootTime: "10:00-15:00", park: "麻峪东街停车点", desc: "紧邻永定河，胡同狭窄幽深，有老厂房改造文创空间" },
+            { name: "金顶街胡同", lng: 116.223, lat: 39.968, area: "shijingshan", tag: "美食|小众", ebike: "allow", shootTime: "11:00-18:00", park: "金顶街路口停车区", desc: "老社区胡同，藏着多家石景山特色小吃店" },
+            { name: "古城胡同", lng: 116.245, lat: 39.942, area: "shijingshan", tag: "复古|安静", ebike: "allow", shootTime: "9:30-16:30", park: "古城大街停车场", desc: "紧邻古城地铁站，老北京胡同与现代建筑交融" },
+            { name: "广宁村胡同", lng: 116.118, lat: 39.962, area: "shijingshan", tag: "安静|小众", ebike: "allow", shootTime: "8:30-15:30", park: "广宁路停车区", desc: "京西偏远胡同，原生态风貌，几乎无游客" },
+            { name: "苹果园胡同", lng: 116.205, lat: 39.958, area: "shijingshan", tag: "文艺|小众", ebike: "allow", shootTime: "10:00-17:00", park: "苹果园地铁站停车场", desc: "老工业区改造，文创空间、咖啡馆多，适合工业风拍摄" },
+            { name: "八角北路胡同", lng: 116.248, lat: 39.927, area: "shijingshan", tag: "美食|安静", ebike: "allow", shootTime: "11:00-18:00", park: "八角游乐园停车区", desc: "居民区胡同，特色家常菜馆、小吃店密集" },
+            
+            // 海淀区（6条）
+            { name: "苏州街", lng: 116.318, lat: 39.982, area: "haidian", tag: "历史|美食", ebike: "allow", shootTime: "10:00-18:00", park: "街两端停车区", desc: "明清皇家御道，现在是美食街，紧邻颐和园" },
+            { name: "成府路胡同群", lng: 116.338, lat: 40.003, area: "haidian", tag: "文艺|安静", ebike: "allow", shootTime: "14:00-20:00", park: "五道口地铁站停车场", desc: "围绕清华、北大，文艺氛围浓厚，咖啡馆、书店多" },
+            { name: "颐和园路胡同", lng: 116.305, lat: 39.992, area: "haidian", tag: "历史|复古", ebike: "allow", shootTime: "9:00-16:30", park: "颐和园东宫门停车场", desc: "紧邻颐和园，古色古香，皇家园林周边风貌" },
+            { name: "清华园胡同", lng: 116.332, lat: 40.009, area: "haidian", tag: "安静|文艺", ebike: "allow", shootTime: "10:00-17:00", park: "清华大学西门停车场", desc: "清华园周边，学术氛围浓厚，安静整洁" },
+            { name: "海淀黄庄胡同", lng: 116.328, lat: 39.988, area: "haidian", tag: "网红|美食", ebike: "allow", shootTime: "11:00-19:00", park: "海淀黄庄地铁站停车场", desc: "高校聚集区，网红美食、潮流小店多" },
+            { name: "西山脚下胡同群", lng: 116.275, lat: 39.995, area: "haidian", tag: "安静|小众", ebike: "allow", shootTime: "8:30-16:00", park: "西山森林公园停车区", desc: "西山脚下，原生态胡同，自然风景优美" },
+            
+            // 朝阳区（6条）
+            { name: "三里屯北小街", lng: 116.465, lat: 39.938, area: "chaoyang", tag: "网红|文艺", ebike: "allow", shootTime: "15:00-21:00", park: "三里屯SOHO停车场", desc: "潮流小店聚集地，适合拍摄时尚、文艺vlog" },
+            { name: "五道营胡同（朝阳分巷）", lng: 116.432, lat: 39.941, area: "chaoyang", tag: "小众|安静", ebike: "allow", shootTime: "10:00-17:00", park: "巷口路边停车点", desc: "东城区五道营胡同延伸，人少清静，文创店多" },
+            { name: "国子监街（朝阳段）", lng: 116.429, lat: 39.939, area: "chaoyang", tag: "历史|安静", ebike: "allow", shootTime: "9:00-16:30", park: "雍和宫地铁站停车场", desc: "紧邻雍和宫，文化氛围浓厚，古色古香" },
+            { name: "工人体育场北路胡同", lng: 116.458, lat: 39.936, area: "chaoyang", tag: "网红|时尚", ebike: "allow", shootTime: "16:00-22:00", park: "工人体育场停车场", desc: "潮流聚集地，酒吧、餐厅多，夜景繁华" },
+            { name: "青年路胡同", lng: 116.492, lat: 39.928, area: "chaoyang", tag: "美食|网红", ebike: "allow", shootTime: "11:00-19:00", park: "青年路地铁站停车场", desc: "居民区周边，网红美食、特色小店多" },
+            { name: "孙河乡胡同群", lng: 116.578, lat: 39.992, area: "chaoyang", tag: "安静|小众", ebike: "allow", shootTime: "9:00-16:00", park: "孙河地铁站停车区", desc: "近郊原生态胡同，人少清静，自然风貌好" },
+            
+            // 丰台区（5条）
+            { name: "宛平城胡同群", lng: 116.238, lat: 39.867, area: "fengtai", tag: "历史|复古", ebike: "allow", shootTime: "9:00-16:00", park: "宛平城东门停车场", desc: "明清古城，保留完整城墙，胡同内有抗战纪念馆" },
+            { name: "大井胡同", lng: 116.245, lat: 39.889, area: "fengtai", tag: "美食|小众", ebike: "allow", shootTime: "11:00-19:00", park: "大井路停车区", desc: "老北京社区胡同，特色卤煮、炒肝店聚集地" },
+            { name: "右安门胡同", lng: 116.352, lat: 39.882, area: "fengtai", tag: "历史|安静", ebike: "allow", shootTime: "9:30-16:30", park: "右安门地铁站停车场", desc: "南城老胡同，保留传统民居风貌" },
+            { name: "花乡胡同", lng: 116.348, lat: 39.847, area: "fengtai", tag: "安静|小众", ebike: "allow", shootTime: "8:30-15:30", park: "花乡地铁站停车区", desc: "近郊胡同，花卉种植基地周边，环境优美" },
+            { name: "卢沟桥胡同", lng: 116.225, lat: 39.862, area: "fengtai", tag: "历史|复古", ebike: "allow", shootTime: "9:00-17:00", park: "卢沟桥景区停车场", desc: "卢沟桥周边，明清建筑多，历史氛围浓厚" },
+            
+            // 通州区（5条）
+            { name: "西海子胡同", lng: 116.658, lat: 39.912, area: "tongzhou", tag: "历史|安静", ebike: "allow", shootTime: "8:30-16:30", park: "西海子公园停车场", desc: "紧邻西海子公园，运河文化浓厚，胡同幽静" },
+            { name: "南大街胡同群", lng: 116.652, lat: 39.907, area: "tongzhou", tag: "复古|美食", ebike: "allow", shootTime: "10:00-18:00", park: "南大街路口停车区", desc: "通州老城区核心，明清建筑多，特色小吃丰富" },
+            { name: "新华大街胡同", lng: 116.665, lat: 39.915, area: "tongzhou", tag: "网红|文艺", ebike: "allow", shootTime: "11:00-19:00", park: "通州万达广场停车场", desc: "通州核心区，潮流小店、文创空间多" },
+            { name: "张家湾胡同群", lng: 116.758, lat: 39.892, area: "tongzhou", tag: "历史|安静", ebike: "allow", shootTime: "9:00-16:00", park: "张家湾古镇停车场", desc: "运河古镇，明清建筑保存完好，历史氛围浓厚" },
+            { name: "宋庄胡同群", lng: 116.795, lat: 39.942, area: "tongzhou", tag: "文艺|小众", ebike: "allow", shootTime: "14:00-20:00", park: "宋庄艺术区停车场", desc: "艺术区周边，艺术家工作室、画廊多，文艺氛围浓厚" }
+        ];
+
+        // 超时检测（10秒）
+        setTimeout(() => {
+            if (!mapLoaded) {
+                mapPlaceholder.style.display = "none";
+                errorTip.innerHTML = `❌ 地图加载超时（本地运行常见问题）<br/>
+                💡 解决方案：<br/>
+                1. 使用Chrome浏览器（兼容性最佳）<br/>
+                2. 关闭广告拦截/隐私保护插件<br/>
+                3. 检查网络连接后刷新页面<br/>
+                📌 无需担心：胡同列表、筛选、导航功能仍可正常使用`;
+                errorTip.style.display = "block";
+                // 初始化纯列表功能
+                initAlleys();
+            }
+        }, 10000);
+
+        // 尝试初始化百度地图
+        try {
+            // 等待百度地图加载
+            const checkBMap = setInterval(() => {
+                if (typeof BMapGL !== "undefined" && BMapGL !== null && !BMapGL.error) {
+                    clearInterval(checkBMap);
+                    
+                    // 初始化地图
+                    map = new BMapGL.Map("map");
+                    const point = new BMapGL.Point(116.404, 39.915);
+                    map.centerAndZoom(point, 14);
+                    map.enableScrollWheelZoom(true);
+                    map.setMapStyleV2({ styleId: "700e55c86c4f882f56d47f7d40820051" });
+                    mapLoaded = true;
+                    
+                    // 隐藏加载占位
+                    mapPlaceholder.style.display = "none";
+                    
+                    // 初始化胡同列表和地图标记
+                    initAlleys();
+                }
+            }, 500);
+        } catch (e) {
+            // 地图初始化失败，仅加载列表
+            mapPlaceholder.style.display = "none";
+            errorTip.innerHTML = `❌ 地图初始化失败：${e.message}<br/>
+            💡 胡同列表、筛选、导航功能不受影响，你可以：<br/>
+            1. 浏览筛选胡同信息<br/>
+            2. 选中胡同后获取导航链接<br/>
+            3. 复制链接到手机百度地图使用`;
+            errorTip.style.display = "block";
+            initAlleys();
+        }
+
+        // 初始化胡同列表和标记
+        function initAlleys() {
+            const alleyList = document.getElementById("alleyList");
+            alleyList.innerHTML = "";
+            
+            // 清空标记
+            if (mapLoaded) {
+                markers.forEach(marker => map.removeOverlay(marker));
+                markers = [];
+            }
+
+            alleyData.forEach(alley => {
+                // 创建列表项
+                const alleyItem = document.createElement("div");
+                alleyItem.className = "alley-item";
+                alleyItem.dataset.name = alley.name;
+                alleyItem.dataset.area = alley.area;
+                alleyItem.dataset.tag = alley.tag;
+                alleyItem.dataset.ebike = alley.ebike;
+                
+                // 格式化标签
+                const tags = alley.tag.split("|").map(tag => `<span>${tag}</span>`).join("");
+                
+                alleyItem.innerHTML = `
+                    <div class="alley-name">
+                        ${alley.name}
+                        <span class="${alley.ebike === 'allow' ? 'allow-ebike' : 'forbid-ebike'}">
+                            ${alley.ebike === 'allow' ? '✅ 可通行' : '❌ 禁通行'}
+                        </span>
+                    </div>
+                    <div class="alley-tag">
+                        <span>${getAreaName(alley.area)}</span>
+                        ${tags}
+                        <span>最佳拍摄：${alley.shootTime}</span>
+                    </div>
+                    <div class="alley-info">
+                        🅿️ 停车点：${alley.park} | 📝 简介：${alley.desc}
+                    </div>
+                `;
+                
+                // 绑定点击事件
+                alleyItem.onclick = function() {
+                    toggleAlleySelection(alley, alleyItem);
+                };
+                alleyList.appendChild(alleyItem);
+
+                // 地图标记（仅当地图加载成功时）
+                if (mapLoaded) {
+                    // 自定义图标
+                    const icon = new BMapGL.Icon(
+                        alley.ebike === 'allow' 
+                            ? "https://img.icons8.com/fluency/32/0091ff/checkmark.png" 
+                            : "https://img.icons8.com/fluency/32/f53f3f/x.png",
+                        new BMapGL.Size(32, 32)
+                    );
+                    
+                    // 创建标记
+                    const marker = new BMapGL.Marker(new BMapGL.Point(alley.lng, alley.lat), { icon: icon });
+                    marker.setTitle(alley.name);
+                    
+                    // 添加标签
+                    marker.setLabel(new BMapGL.Label(
+                        `${alley.name}<br/><span style="font-size:11px;color:${alley.ebike === 'allow' ? '#00b42a' : '#f53f3f'}">${alley.ebike === 'allow' ? '电动车可通行' : '电动车禁行'}</span>`, 
+                        { offset: new BMapGL.Size(20, -10) }
+                    ));
+                    
+                    // 标记点击事件
+                    marker.onclick = function() {
+                        const item = document.querySelector(`.alley-item[data-name="${alley.name}"]`);
+                        if (item) toggleAlleySelection(alley, item);
+                    };
+                    
+                    map.addOverlay(marker);
+                    markers.push(marker);
+                }
+            });
+            
+            // 更新选中计数
+            updateSelectedCount();
+        }
+
+        // 辅助函数：获取区域名称
+        function getAreaName(areaCode) {
+            const areaMap = {
+                dongcheng: "东城区", xicheng: "西城区", shijingshan: "石景山区",
+                haidian: "海淀区", chaoyang: "朝阳区", fengtai: "丰台区", tongzhou: "通州区"
+            };
+            return areaMap[areaCode] || areaCode;
+        }
+
+        // 切换胡同选择状态
+        function toggleAlleySelection(alley, alleyItem) {
+            const index = selectedAlleys.findIndex(item => item.name === alley.name);
+            if (index > -1) {
+                // 取消选择
+                selectedAlleys.splice(index, 1);
+                alleyItem.classList.remove("selected");
+            } else {
+                // 选择
+                selectedAlleys.push(alley);
+                alleyItem.classList.add("selected");
+            }
+            // 更新计数
+            updateSelectedCount();
+        }
+
+        // 更新选中计数
+        function updateSelectedCount() {
+            selectedCount.textContent = `已选择：${selectedAlleys.length} 条胡同（至少选择2条可生成路线）`;
+            if (selectedAlleys.length >= 2) {
+                selectedCount.style.color = "#00b42a";
+            } else {
+                selectedCount.style.color = "#2f54eb";
+            }
+        }
+
+        // 生成骑行路线（增强版）
+        function generateRoute() {
+            if (selectedAlleys.length < 2) {
+                alert("请至少选择2条胡同进行路线规划！");
+                return;
+            }
+            
+            // 生成路线详情
+            let routeInfo = `### 骑行路线规划\n\n`;
+            routeInfo += `📅 推荐出行时间：白天（避开晚高峰）\n`;
+            routeInfo += `🚴 路线总长度：约${(selectedAlleys.length * 1.5).toFixed(1)}公里（估算）\n\n`;
+            routeInfo += `### 途经胡同（${selectedAlleys.length}条）\n`;
+            
+            selectedAlleys.forEach((alley, index) => {
+                routeInfo += `${index + 1}. ${alley.name}（${getAreaName(alley.area)}）\n`;
+                routeInfo += `   - 电动车：${alley.ebike === 'allow' ? '✅ 可通行' : '❌ 禁通行（建议停在'+alley.park+'）'}\n`;
+                routeInfo += `   - 特色：${alley.tag.replace('|', '、')}\n`;
+                routeInfo += `   - 最佳拍摄时间：${alley.shootTime}\n\n`;
+            });
+            
+            const forbidAlleys = selectedAlleys.filter(a => a.ebike === "forbid");
+            if (forbidAlleys.length > 0) {
+                routeInfo += `### 注意事项\n`;
+                routeInfo += `⚠️ 以下胡同禁止电动车通行，请将车辆停在指定位置后步行进入：\n`;
+                forbidAlleys.forEach(alley => {
+                    routeInfo += `   - ${alley.name}：${alley.park}\n`;
+                });
+            }
+            
+            // 更新弹窗内容
+            routeContent.innerHTML = routeInfo.replace(/\n/g, '<br/>');
+            
+            if (!mapLoaded) {
+                // 地图未加载时显示弹窗
+                routePopup.style.display = "block";
+                overlay.style.display = "block";
+                alert("📌 地图未加载成功（本地运行常见）\n\n已为你生成路线详情，可复制后使用！");
+                return;
+            }
+
+            // 清除原有路线
+            if (polyline) map.removeOverlay(polyline);
+
+            // 生成路线点（禁行胡同偏移到入口）
+            const points = selectedAlleys.map(alley => {
+                const point = new BMapGL.Point(alley.lng, alley.lat);
+                if (alley.ebike === "forbid") {
+                    point.lat -= 0.001; // 轻微偏移
+                }
+                return point;
+            });
+
+            // 创建路线
+            polyline = new BMapGL.Polyline(points, {
+                strokeColor: "#2f54eb", 
+                strokeWeight: 5, 
+                strokeOpacity: 0.9,
+                strokeStyle: "solid"
+            });
+            map.addOverlay(polyline);
+            map.setViewport(points); // 自适应视野
+
+            // 显示路线弹窗
+            routePopup.style.display = "block";
+            overlay.style.display = "block";
+
+            // 提示禁行胡同
+            if (forbidAlleys.length > 0) {
+                alert(`💡 路线提示：\n${forbidAlleys.map(a => `• ${a.name}`).join("\n")}\n以上胡同禁止电动车通行，路线已规划至入口停车点`);
+            }
+        }
+
+        // 导航功能（本地运行优化）
+        function navigate() {
+            if (selectedAlleys.length < 2) {
+                alert("请至少选择2条胡同生成路线后再导航！");
+                return;
+            }
+
+            // 生成导航坐标（禁行胡同偏移）
+            const locations = selectedAlleys.map(alley => {
+                const lat = alley.ebike === "forbid" ? alley.lat - 0.001 : alley.lat;
+                return `${lat},${alley.lng}`;
+            }).join(";");
+
+            // 百度地图导航链接（兼容本地运行）
+            const navUrl = `https://api.map.baidu.com/direction?origin=我的位置&destination=latlng:${locations}&mode=ebike&output=html&src=local_app`;
+            
+            // 本地运行适配：复制链接+提示
+            try {
+                navigator.clipboard.writeText(navUrl);
+                alert(`✅ 导航链接已复制到剪贴板！\n\n${navUrl}\n\n📱 使用方法：\n1. 打开手机百度地图\n2. 粘贴链接到浏览器打开\n3. 或复制链接到百度地图搜索框`);
+            } catch (e) {
+                // 剪贴板失败时弹窗显示链接
+                alert(`📌 导航链接（请手动复制）：\n${navUrl}\n\n使用提示：复制到手机百度地图打开即可导航`);
+                // 尝试打开新窗口
+                window.open(navUrl, "_blank");
+            }
+        }
+
+        // 筛选功能（增强版，支持搜索+多条件）
+        function filterAlleys() {
+            const searchText = searchInput.value.toLowerCase().trim();
+            const areaFilter = document.querySelector(".filter-btn[data-area].active").dataset.area;
+            const tagFilter = document.querySelector(".filter-btn[data-tag].active").dataset.tag;
+            const ebikeFilter = document.querySelector(".filter-btn[data-ebike].active").dataset.ebike;
+
+            const alleyItems = document.querySelectorAll(".alley-item");
+            alleyData.forEach((alley, index) => {
+                // 筛选条件判断
+                const isAreaMatch = areaFilter === "all" || alley.area === areaFilter;
+                const isTagMatch = tagFilter === "all" || alley.tag.includes(tagFilter);
+                const isEbikeMatch = ebikeFilter === "all" || alley.ebike === ebikeFilter;
+                // 搜索条件判断
+                const isSearchMatch = searchText === "" || 
+                                      alley.name.toLowerCase().includes(searchText) || 
+                                      alley.tag.toLowerCase().includes(searchText) || 
+                                      getAreaName(alley.area).toLowerCase().includes(searchText) ||
+                                      alley.desc.toLowerCase().includes(searchText);
+                
+                // 显示/隐藏列表项
+                alleyItems[index].style.display = isAreaMatch && isTagMatch && isEbikeMatch && isSearchMatch ? "block" : "none";
+                
+                // 同步筛选地图标记
+                if (mapLoaded && markers[index]) {
+                    markers[index].setVisible(isAreaMatch && isTagMatch && isEbikeMatch && isSearchMatch);
+                }
+            });
+        }
+
+        // 绑定筛选按钮事件
+        function bindFilterEvents() {
+            // 区域筛选
+            document.querySelectorAll(".filter-btn[data-area]").forEach(btn => {
+                btn.onclick = function() {
+                    document.querySelectorAll(".filter-btn[data-area]").forEach(b => b.classList.remove("active"));
+                    this.classList.add("active");
+                    filterAlleys();
+                };
+            });
+
+            // 特色筛选
+            document.querySelectorAll(".filter-btn[data-tag]").forEach(btn => {
+                btn.onclick = function() {
+                    document.querySelectorAll(".filter-btn[data-tag]").forEach(b => b.classList.remove("active"));
+                    this.classList.add("active");
+                    filterAlleys();
+                };
+            });
+
+            // 电动车筛选
+            document.querySelectorAll(".filter-btn[data-ebike]").forEach(btn => {
+                btn.onclick = function() {
+                    document.querySelectorAll(".filter-btn[data-ebike]").forEach(b => b.classList.remove("active"));
+                    this.classList.add("active");
+                    filterAlleys();
+                };
+            });
+
+            // 搜索框事件
+            searchInput.addEventListener("input", filterAlleys);
+            searchInput.addEventListener("keyup", function(e) {
+                if (e.key === "Enter") filterAlleys();
+            });
+        }
+
+        // 绑定弹窗事件
+        function bindPopupEvents() {
+            // 关闭弹窗
+            popupClose.onclick = function() {
+                routePopup.style.display = "none";
+                overlay.style.display = "none";
+            };
+            
+            overlay.onclick = function() {
+                routePopup.style.display = "none";
+                overlay.style.display = "none";
+            };
+            
+            // 复制路线信息
+            copyRouteBtn.onclick = function() {
+                const text = routeContent.innerText;
+                try {
+                    navigator.clipboard.writeText(text);
+                    alert("✅ 路线信息已复制到剪贴板！");
+                } catch (e) {
+                    alert("📌 复制失败，请手动复制路线信息");
+                }
+            };
+        }
+
+        // 绑定功能按钮事件
+        function bindFunctionEvents() {
+            // 清空选择
+            document.getElementById("clearBtn").onclick = function() {
+                selectedAlleys = [];
+                document.querySelectorAll(".alley-item").forEach(item => item.classList.remove("selected"));
+                if (mapLoaded && polyline) {
+                    map.removeOverlay(polyline);
+                    polyline = null;
+                }
+                updateSelectedCount();
+            };
+
+            // 生成路线
+            document.getElementById("routeBtn").onclick = generateRoute;
+            
+            // 导航出发
+            document.getElementById("navBtn").onclick = navigate;
+        }
+
+        // 初始化所有事件绑定
+        bindFilterEvents();
+        bindFunctionEvents();
+        bindPopupEvents();
+        
+        // 初始化胡同列表
+        initAlleys();
+    </script>
+</body>
+</html>
